@@ -151,7 +151,7 @@ custom_format <- function(x) {
 }
 
 # create the gt table 
-which_QB_has_it_easiest %>% 
+which_QB_has_it_easiest_gt <- which_QB_has_it_easiest %>% 
   left_join(team_df, by = c("primary_team" = "team_abbr" )) %>% 
   left_join(headshot_list, by = c("player_display_name" = "full_name" )) %>% 
   distinct(player_display_name, .keep_all = T) %>% 
@@ -198,5 +198,7 @@ which_QB_has_it_easiest %>%
   )
 
 
+gtsave(which_QB_has_it_easiest_gt, "which_QB_has_it_easiest_gt.html" )
 
+gtsave(which_QB_has_it_easiest_gt, "which_QB_has_it_easiest_gt.png" )
   
