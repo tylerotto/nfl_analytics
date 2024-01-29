@@ -2,45 +2,11 @@ library(tidyverse)
 library(nflverse)
 library(rvest)
 library(janitor)
-
-# https://bradcongelio.com/nfl-analytics-with-r-book/03-nfl-analytics-functions.html
-
-pbp <- nflreadr::load_pbp(2022) %>%
-  filter(posteam == "PHI" & rush == 1) %>%
-  group_by(rusher) %>%
-  summarize(success_rate = mean(success))
+library(gt)
+library(gtExtras)
+library(vroom)
 
 
-# total points score by game date
-
-
-# 
-# away_score	Total points scored by the away team.	numeric
-# home_score, roof, surface, start_time, 
-
-# function attempt
-total_score_slicer <- function(column_x){
-    nflreadr::load_pbp(2018:2022) %>% 
-      mutate(day_of_the_week = lubridate::wday(game_date,label = TRUE),
-             total_score = away_score + home_score
-      ) %>%  
-      distinct(game_id, away_score, home_score,total_score, game_date, {{ column_x }}) %>% 
-      group_by( {{ column_x }}) %>% 
-      summarise(average_total_score = mean(total_score),
-                game_count = n_distinct(game_id))
-
-}
-
-
-nflreadr::load_pbp(2018:2022) %>% 
-  mutate(day_of_the_week = lubridate::wday(game_date,label = TRUE),
-         total_score = away_score + home_score
-  ) %>% 
-  filter(day_of_the_week == "Fri")
-
-# calling the function 
-my_function(day_of_the_week)
-my_function(surface)
 
 # working code
 nflreadr::load_pbp(2022) %>% 
@@ -104,7 +70,7 @@ primary_team_add <- nflreadr::load_player_stats(seasons=T) %>%
   distinct(player_display_name, .keep_all = TRUE) %>%  #break ties for players who had similar amount of years %>% 
   rename(primary_team = recent_team)
 
-
+# combine all the data sources
 which_QB_has_it_easiest <- left_join(career_yards, nfl_career_earnings_otc, by = c("player_display_name"="Player")) %>% 
   janitor::clean_names() %>% 
   mutate(career_earnings_numeric = as.numeric(gsub("[$,]","", career_earnings )),
@@ -123,9 +89,7 @@ which_QB_has_it_easiest <- left_join(career_yards, nfl_career_earnings_otc, by =
 
 # pull in the team logos
 
-library(gt)
-library(gtExtras)
-library(vroom)
+
 
 teams <- "https://github.com/nflverse/nflfastR-data/raw/master/teams_colors_logos.rds"
 team_df <- readRDS(url(teams)) %>% 
@@ -142,9 +106,11 @@ headshot_list <- nflreadr::load_rosters(1999:2022) %>%
   filter(index_flag == 1) %>% 
   select(full_name, headshot_url)
 
-check <- load_rosters(1999:2022) %>% 
-  filter(full_name == "Luke McCown")
-
+load_rosters(1999:2022) %>% 
+  group_by(full_name) %>% 
+  summarise(headshot_count = n_distinct(headshot_url),
+            team_count = n_distinct(team)) %>% 
+  arrange((desc(headshot_count)))
 
 custom_format <- function(x) {
   paste0("$", format(x / 1000, nsmall = 1), "k")

@@ -1,0 +1,233 @@
+---
+title: "What The Best Job In The World? Clipboard Holders."
+format: html
+editor: visual
+editor_options: 
+  chunk_output_type: inline
+output: 
+  html_document:
+    toc: yes
+    toc_float:
+      collapsed: true
+---
+
+## Money for Nothing and Yardsticks for Free
+
+Whats the best job in the world? Everyone has a dream job, but maybe there's some middle ground and agreement for some professions. Is it those who travel the world as TV hosts - like Samantha Brown on the travel channel? Perhaps, its someone like Alex Trebek or Pat Sajak who get to host games for a living.
+
+There's no right or wrong answer in this icebreaker questions, but I think I'm close when I guess that backup QBs in the NFL are definitely up there. Surely they make some money holding a clipboard. I wondered, "Do they earn more per yard than the greats like Tom Brady and Drew Brees?"
+
+Here I'll be leveraging multiple R libraries, but the most important one here is the `nflverse` library. You can read up on all of the data available in the *nflverse [here](https://nflreadr.nflverse.com/articles/index.html).*
+
+Let's pull the career earnings from *overthecap.com* for all players for the last few decades. By leveraging the `read_html` and `html_table` functions from `rvest` (like harvesting data), a library that allows us to scrape web pages. Let's take a quick look at the data structure and the top 10 rows.
+
+# Over The Cap - Salary Data
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(nflverse)
+library(rvest)
+library(janitor)
+library(gt)
+library(gtExtras)
+library(vroom)
+
+# Pull earning from over the cap using rvest
+over_the_cap <- read_html("https://overthecap.com/career-earnings")
+
+otc_tables <- over_the_cap %>%
+  html_table(fill = TRUE)
+
+nfl_career_earnings_otc <- otc_tables[[1]]
+
+nfl_career_earnings_otc %>% 
+  select(1:5) %>% 
+  slice_head(n = 10) %>% 
+  gt()
+
+```
+
+# Leveraging the nflverse
+
+Now that we have our salary data in order, let's look at what the `nflverse` has to offer for player data. The `load_player_stats` function provides over 50 columns of player stats by season. Looks like the player stats goes back to 1999. Lucky me, that's when I really started to pay attention to the league as a kid.
+
+```{r}
+nflreadr::load_player_stats(seasons=T) %>% 
+  glimpse()
+
+```
+
+```{r}
+career_yards <- nflreadr::load_player_stats(seasons=T) %>% 
+  filter(position == "QB", !is.na(player_display_name )) %>%
+  group_by(player_display_name ) %>%
+  summarize(
+    passing_yards = sum(passing_yards, na.rm = TRUE),
+    total_cmp = sum(completions, na.rm = TRUE)
+    ) %>% 
+  ungroup() %>% 
+  filter(total_cmp >= 100) %>% 
+  arrange(desc(passing_yards))
+
+career_yards %>% 
+  slice_head(n=10) %>% 
+  gt()
+
+```
+
+# Trick Plays
+
+We have a bit of an issue between our salary data and player data. The former data goes back further than 1999 which is where the player data begins. For example, Dan Marino and Troy Aikman, NFL Hall of Fame members, have tens of thousands of yards accumulated in their career, but it won't show up since their careers ended around the time this data begins.
+
+So I'm creating a filter that removes QBs who have only one season in the data. Also, I'd like to assign one primary team to the QBs who played on multiple teams. I'm choosing which ever team they spent the most time with.
+
+```{r message=FALSE, warning=FALSE}
+# need to filter out marino and aikman, but want to avoid manual removal
+QB_Filter <- nflreadr::load_player_stats(seasons=T) %>% 
+  filter(position == "QB", !is.na(player_display_name )) %>% 
+  group_by(player_display_name,recent_team) %>% 
+    summarise(n_seasons = n_distinct(season)) %>% 
+  ungroup() %>% 
+  filter(n_seasons > 2) %>% 
+  distinct(player_display_name, .keep_all = T)
+
+# add primary team 
+primary_team_add <- nflreadr::load_player_stats(seasons=T) %>% 
+  filter(position == "QB", !is.na(player_display_name )) %>% 
+  group_by(player_display_name,recent_team) %>% 
+  summarise(n_seasons = n_distinct(season)) %>% 
+  filter(n_seasons == max(n_seasons)) %>% 
+  ungroup() %>% 
+  distinct(player_display_name, .keep_all = TRUE) %>%  #break ties for players who had similar amount of years %>% 
+  rename(primary_team = recent_team)
+
+# combine all the data sources
+which_QB_has_it_easiest <- left_join(career_yards, nfl_career_earnings_otc, by = c("player_display_name"="Player")) %>% 
+  janitor::clean_names() %>% 
+  mutate(career_earnings_numeric = as.numeric(gsub("[$,]","", career_earnings )),
+         earnings_per_yard = round(career_earnings_numeric/passing_yards,0) 
+         ) %>% 
+  select(player_display_name,career_earnings_numeric,passing_yards,  earnings_per_yard) %>% 
+  arrange(desc(earnings_per_yard)) %>%
+  inner_join(QB_Filter, by = 'player_display_name') %>% 
+  inner_join(primary_team_add, by = 'player_display_name')
+```
+
+# Creating the final table
+
+Awesome! We're really close to a final product, however, I'd like to make this table as professional looking and easy to digest as possible. Let's leverage the functionality of the library `*gt*` (great tables) to add some flair.
+
+Luckily, the nflverse provides the team logo's URL in an R Data Frame for us to utilize. Even better, the `load_rosters` function for us to pull headshot photos with a URL.
+
+It looks like there's multiple headshots per player, so we can filter the data down to one headshot per player.
+
+```{r}
+
+
+teams <- "https://github.com/nflverse/nflfastR-data/raw/master/teams_colors_logos.rds"
+team_df <- readRDS(url(teams)) %>% 
+  select(team_abbr, team_logo_espn)
+
+# grab one headshot per player
+headshot_list <- nflreadr::load_rosters(1999:2022) %>%
+  group_by(full_name, gsis_id) %>% 
+  mutate(index = row_number()) %>%
+  ungroup() %>% 
+  group_by(full_name) %>% 
+  mutate(index_flag = if_else(max(index) == index, 1,0)) %>% 
+  ungroup() %>% 
+  filter(index_flag == 1) %>% 
+  select(full_name, headshot_url)
+
+load_rosters(1999:2022) %>% 
+  group_by(full_name) %>% 
+  summarise(headshot_count = n_distinct(headshot_url),
+            team_count = n_distinct(team)) %>% 
+  arrange((desc(headshot_count))) %>% 
+  slice_head(n=10) %>% 
+  gt()
+
+
+```
+
+# Green Flag instead of Yellow Flag: Clipboard Holding
+
+I've been using many different libraries for tables in the past, but `great tables` has really impressed me with the syntax. I was able incorporate the NFL logo and the player's headshot in this table which was exciting to build.
+
+```{r warning=FALSE}
+# create the gt table 
+custom_format <- function(x) {
+  paste0("$", format(x / 1000, nsmall = 1), "k")
+}
+
+
+which_QB_has_it_easiest_gt <- which_QB_has_it_easiest %>% 
+  left_join(team_df, by = c("primary_team" = "team_abbr" )) %>% 
+  left_join(headshot_list, by = c("player_display_name" = "full_name" )) %>% 
+  distinct(player_display_name, .keep_all = T) %>% 
+  select(player_display_name,headshot_url, career_earnings_numeric,passing_yards,
+         earnings_per_yard, primary_team,team_logo_espn) %>% 
+  arrange(desc(earnings_per_yard)) %>% 
+  slice_head(n = 10) %>% # pipe to the great tables function  
+  gt::gt() %>% 
+  gt::tab_header(
+    title = md("**Clipboard Holders: Which QB Earned Easy Money?**"),
+    subtitle = md("*1999-2023  |  Earnings per Yard Passed*")) %>% 
+  tab_stubhead(label = "Quarterback") %>%
+  gt_img_rows(team_logo_espn , height = 40) %>% 
+  gt_img_rows(headshot_url, height = 25)  %>% 
+  cols_label(
+    player_display_name = "Quarterback",
+    headshot_url = "",
+    career_earnings_numeric = "Career Earnings",
+    passing_yards = "Career Passing Yards",
+    earnings_per_yard = "Earnings Per Yard",
+    primary_team = "Primary Team",
+    team_logo_espn = "Team Logo") %>%
+  cols_move_to_start(
+    columns = headshot_url) %>%
+  cols_align(align = "center", columns = c("player_display_name")) %>% 
+  gt_color_box(earnings_per_yard, domain = 5000:30000,
+               palette = "ggsci::blue_material",
+               format = custom_format) %>% 
+  fmt_currency(
+    columns = c(career_earnings_numeric),   # Specify the column(s) to format
+    currency = "USD",         # Specify the currency symbol
+    decimals = 0                # Specify the number of decimal places
+  ) %>%
+  fmt_number(
+    columns = c(passing_yards),  # Specify the column(s) to format
+    use_seps = TRUE ,
+    decimals = 0 # Enable thousands separators
+  ) %>% 
+  gtExtras::gt_theme_538() %>% 
+  tab_source_note(
+    source_note = md("*Special thanks to friends and family for the idea and Brad J. Congelio for his textbook on NFL analytics*"))  %>% 
+  tab_footnote(
+    footnote  = "Table created by: Tyler Otto"
+  )
+
+
+  
+```
+
+# Clipboard Holders: Which QB Earned Easy Money?
+
+We've got a career backup QB, a RB/WR/TE/QB hybrid, one of the biggest draft busts all-time, and a journeyman QB who has made a career from playing with two of the greatest coaching in recent history in our top 4.
+
+Excluding Lamar Jackson, who at the time of writing this is on the precipice of clinching a Super Bowl apperance and MVP title, most of the player here are career backups. I'm sure we've all had an hourly rate attached to our work at some point, but have you ever thought about how much you could earn with a 10 yard pass in the NFL? Chase Daniel with a sultry 240k deposit definitely puts him up there for best job in the world. 
+
+```{r}
+
+which_QB_has_it_easiest_gt
+
+```
+
+```{r warning=FALSE, include=FALSE}
+f <- chromote::default_chromote_object() #get the f object
+f$close()
+
+gtsave(which_QB_has_it_easiest_gt, "which_QB_has_it_easiest_gt.html" )
+
+gtsave(which_QB_has_it_easiest_gt, "which_QB_has_it_easiest_gt.png", expand = 25 )
+```
